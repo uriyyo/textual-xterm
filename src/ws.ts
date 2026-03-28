@@ -100,11 +100,20 @@ export function connectTerminalToWS(
     sendJSONIfOpen(["blur"]);
   });
 
+  let pingInterval: ReturnType<typeof setInterval> | null = null;
+
   webSocket.addEventListener("close", () => {
+    if (pingInterval !== null) {
+      clearInterval(pingInterval);
+      pingInterval = null;
+    }
     document.body.classList.add("-closed");
   });
 
   webSocket.addEventListener("open", () => {
+    pingInterval = setInterval(() => {
+      sendJSONIfOpen(["ping", Date.now()]);
+    }, 30000);
     terminal.focus();
   });
 }

@@ -1,5 +1,4 @@
 import { Terminal } from "@xterm/xterm";
-import { AttachAddon } from "@xterm/addon-attach";
 import { FitAddon } from "@xterm/addon-fit";
 
 function getCellSize(terminal: Terminal): { width: number; height: number } {
@@ -37,9 +36,6 @@ export function connectTerminalToWS(
     }
   };
 
-  const attachAddon = new AttachAddon(webSocket, { bidirectional: false });
-  terminal.loadAddon(attachAddon);
-
   terminal.onData((data) => {
     if (data.includes("\x1b[?") && data.includes("$y")) {
       return;
@@ -54,12 +50,13 @@ export function connectTerminalToWS(
 
   let firstByte = false;
   webSocket.addEventListener("message", (event) => {
-    if (!firstByte && event.data instanceof ArrayBuffer) {
-      firstByte = true;
-      document.body.classList.add("-first-byte");
-    }
-
-    if (typeof event.data === "string") {
+    if (event.data instanceof ArrayBuffer) {
+      if (!firstByte) {
+        firstByte = true;
+        document.body.classList.add("-first-byte");
+      }
+      terminal.write(new Uint8Array(event.data));
+    } else if (typeof event.data === "string") {
       try {
         const message = JSON.parse(event.data);
         if (Array.isArray(message)) {

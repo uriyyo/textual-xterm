@@ -26,7 +26,7 @@ function createTerminal(
   const clipboardAddon = new ClipboardAddon();
   terminal.loadAddon(clipboardAddon);
 
-  const imageAddon = new ImageAddon({});
+  const imageAddon = new ImageAddon({showPlaceholder: false});
   terminal.loadAddon(imageAddon);
 
   const unicode11Addon = new Unicode11Addon();

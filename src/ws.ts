@@ -9,46 +9,65 @@ function getCellSize(terminal: Terminal): { width: number; height: number } {
   };
 }
 
-export function connectTerminalToWS(
+function buildWebSocketUrl(
   terminal: Terminal,
-  fitAddon: FitAddon,
   wsUrl: string,
   fontSize: number,
-) {
-  const cols = terminal.cols;
-  const rows = terminal.rows;
+): string {
   const cellSize = getCellSize(terminal);
-
   const params = new URLSearchParams({
     fontSize: fontSize.toString(),
-    width: cols.toString(),
-    height: rows.toString(),
+    width: terminal.cols.toString(),
+    height: terminal.rows.toString(),
     cellWidth: cellSize.width.toString(),
     cellHeight: cellSize.height.toString(),
   });
+  return `${wsUrl}?${params.toString()}`;
+}
 
-  const webSocket = new WebSocket(`${wsUrl}?${params.toString()}`);
-  webSocket.binaryType = "arraybuffer";
+function handleOpenUrl(payload: { url: string; new_tab?: boolean }) {
+  window.open(payload.url, payload.new_tab ? "_blank" : "_self");
+}
 
-  const sendJSONIfOpen = (data: any) => {
-    if (webSocket.readyState === WebSocket.OPEN) {
-      webSocket.send(JSON.stringify(data));
-    }
-  };
+function handleDeliverFile(payload: string) {
+  const downloadUrl = `${window.location.origin}/download/${payload}`;
+  window.open(downloadUrl, "_blank");
+}
 
+const jsonCommandHandlers: Record<string, (payload: any) => void> = {
+  open_url: handleOpenUrl,
+  deliver_file_start: handleDeliverFile,
+};
+
+function handleJSONCommand(data: string) {
+  try {
+    const message = JSON.parse(data);
+    if (!Array.isArray(message)) return;
+
+    const [type, payload] = message;
+    jsonCommandHandlers[type]?.(payload);
+  } catch {}
+}
+
+function setupTerminalInput(
+  terminal: Terminal,
+  sendJSON: (data: any) => void,
+) {
   terminal.onData((data) => {
     if (data.includes("\x1b[?") && data.includes("$y")) {
       return;
     }
-
-    sendJSONIfOpen(["stdin", data]);
+    sendJSON(["stdin", data]);
   });
 
   terminal.onBinary((data) => {
-    sendJSONIfOpen(["stdin", data]);
+    sendJSON(["stdin", data]);
   });
+}
 
+function setupWebSocketMessages(terminal: Terminal, webSocket: WebSocket) {
   let firstByte = false;
+
   webSocket.addEventListener("message", (event) => {
     if (event.data instanceof ArrayBuffer) {
       if (!firstByte) {
@@ -57,24 +76,19 @@ export function connectTerminalToWS(
       }
       terminal.write(new Uint8Array(event.data));
     } else if (typeof event.data === "string") {
-      try {
-        const message = JSON.parse(event.data);
-        if (Array.isArray(message)) {
-          const [type, payload] = message;
-          if (type === "open_url") {
-            window.open(payload.url, payload.new_tab ? "_blank" : "_self");
-          } else if (type === "deliver_file_start") {
-            const downloadUrl = `${window.location.origin}/download/${payload}`;
-            window.open(downloadUrl, "_blank");
-          }
-        }
-      } catch {}
+      handleJSONCommand(event.data);
     }
   });
+}
 
+function setupResize(
+  terminal: Terminal,
+  fitAddon: FitAddon,
+  sendJSON: (data: any) => void,
+) {
   terminal.onResize(({ cols, rows }) => {
     const cellSize = getCellSize(terminal);
-    sendJSONIfOpen([
+    sendJSON([
       "resize",
       {
         width: cols,
@@ -88,15 +102,26 @@ export function connectTerminalToWS(
   window.addEventListener("resize", () => {
     fitAddon.fit();
   });
+}
 
+function setupFocusEvents(
+  terminal: Terminal,
+  sendJSON: (data: any) => void,
+) {
   terminal.textarea?.addEventListener("focus", () => {
-    sendJSONIfOpen(["focus"]);
+    sendJSON(["focus"]);
   });
 
   terminal.textarea?.addEventListener("blur", () => {
-    sendJSONIfOpen(["blur"]);
+    sendJSON(["blur"]);
   });
+}
 
+function setupWebSocketLifecycle(
+  terminal: Terminal,
+  webSocket: WebSocket,
+  sendJSON: (data: any) => void,
+) {
   let pingInterval: ReturnType<typeof setInterval> | null = null;
 
   webSocket.addEventListener("close", () => {
@@ -109,8 +134,31 @@ export function connectTerminalToWS(
 
   webSocket.addEventListener("open", () => {
     pingInterval = setInterval(() => {
-      sendJSONIfOpen(["ping", Date.now()]);
+      sendJSON(["ping", Date.now()]);
     }, 30000);
     terminal.focus();
   });
+}
+
+export function connectTerminalToWS(
+  terminal: Terminal,
+  fitAddon: FitAddon,
+  wsUrl: string,
+  fontSize: number,
+) {
+  const url = buildWebSocketUrl(terminal, wsUrl, fontSize);
+  const webSocket = new WebSocket(url);
+  webSocket.binaryType = "arraybuffer";
+
+  const sendJSON = (data: any) => {
+    if (webSocket.readyState === WebSocket.OPEN) {
+      webSocket.send(JSON.stringify(data));
+    }
+  };
+
+  setupTerminalInput(terminal, sendJSON);
+  setupWebSocketMessages(terminal, webSocket);
+  setupResize(terminal, fitAddon, sendJSON);
+  setupFocusEvents(terminal, sendJSON);
+  setupWebSocketLifecycle(terminal, webSocket, sendJSON);
 }
